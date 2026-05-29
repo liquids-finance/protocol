@@ -30,7 +30,11 @@ import type {
 } from "@/lib/permit2/sign";
 
 const DEMO_SLUG = `${DEMO_POOL.symbol1.toLowerCase()}-${DEMO_POOL.symbol0.toLowerCase()}`;
-const MAX_LTV_PCT = 86;
+// Mirrors `MAX_LTV_BPS = 6_000` (60 %) in LiquidsHook.sol — keep these in
+// sync. A higher UI value lets users size a borrow that the on-chain LTV
+// gate then reverts with `LTVExceeded`, which is what was surfacing as
+// "transaction will fail" warnings in Zerion's pre-simulation.
+const MAX_LTV_PCT = 60;
 
 // 18 decimals — the share token follows the standard ERC20 convention.
 const SHARE_DECIMALS = 18;

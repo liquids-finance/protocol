@@ -14,7 +14,11 @@ import { DEMO_POOL } from "@/lib/contracts";
 
 const PAIR_LABEL = `${DEMO_POOL.symbol1} / ${DEMO_POOL.symbol0}`;
 const MARKET_SLUG = `${DEMO_POOL.symbol1.toLowerCase()}-${DEMO_POOL.symbol0.toLowerCase()}`;
-const MAX_LTV = 0.86;
+// Mirrors `MAX_LTV_BPS = 6_000` (60 %) in LiquidsHook.sol — keep these in
+// sync. A higher UI value lets users size a borrow that the on-chain LTV
+// gate then reverts with `LTVExceeded`, which is what surfaced as
+// "transaction will fail" warnings in Zerion.
+const MAX_LTV = 0.6;
 
 export default function DashboardPage() {
   const { isConnected } = useAccount();
