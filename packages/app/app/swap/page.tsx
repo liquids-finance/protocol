@@ -13,11 +13,9 @@ import {
 import { SlippagePopover } from "@/components/SlippagePopover";
 import { TokenIcon } from "@/components/TokenIcon";
 import { extractErrorMessage, useTxFlow } from "@/components/TxFlow";
+import { useLiveData } from "@/hooks/useLiveData";
 import { useOkbPriceUsd } from "@/hooks/useOkbPriceUsd";
-import { usePoolState } from "@/hooks/usePoolState";
 import { useQuote } from "@/hooks/useQuote";
-import { useURPermitAllowances } from "@/hooks/useURPermitAllowances";
-import { useUserBalances } from "@/hooks/useUserBalances";
 import { ERC20_ABI } from "@/lib/abi/erc20";
 import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
 import {
@@ -68,15 +66,13 @@ export default function SwapPage() {
   const [slippagePct, setSlippagePct] = useState(0.5);
   const [showSettings, setShowSettings] = useState(false);
 
-  const { balances, refetch: refetchBalances } = useUserBalances();
-  const { allowances: urPermits, refetch: refetchURPermits } = useURPermitAllowances();
-  const { state: pool } = usePoolState();
+  const { pool, user, refetch: refetchLive } = useLiveData();
   const { data: gasPriceWei } = useGasPrice();
   const { price: okbUsd } = useOkbPriceUsd();
 
   const balanceFor = (tok: TokenMeta): bigint | null => {
-    if (!balances) return null;
-    return tok.index === 0 ? balances.usdt0Balance : balances.xethBalance;
+    if (!user) return null;
+    return tok.index === 0 ? user.usdt0Balance : user.xethBalance;
   };
 
   // ─── Quote ──────────────────────────────────────────────────────────
@@ -101,8 +97,8 @@ export default function SwapPage() {
 
   // ─── Auth states ────────────────────────────────────────────────────
   const sellErc20ToPermit2 =
-    balances && (sellTok.index === 0 ? balances.usdt0PermitAllowance : balances.xethPermitAllowance);
-  const urPermit = urPermits && (sellTok.index === 0 ? urPermits.usdt0 : urPermits.xeth);
+    user && (sellTok.index === 0 ? user.usdt0PermitAllowance : user.xethPermitAllowance);
+  const urPermit = user && (sellTok.index === 0 ? user.usdt0UrAllowance : user.xethUrAllowance);
 
   const now = Math.floor(Date.now() / 1000);
   const needsErc20Approve =
@@ -200,8 +196,7 @@ export default function SwapPage() {
       flow.setStep("tx", { status: "done" });
       flow.done();
 
-      refetchBalances();
-      refetchURPermits();
+      refetchLive();
       setSellAmt("");
     } catch (e) {
       flow.fail(extractErrorMessage(e));

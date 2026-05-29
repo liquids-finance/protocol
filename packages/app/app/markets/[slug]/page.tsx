@@ -4,15 +4,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { maxUint256 } from "viem";
-import { useChainId, usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
 
 import { extractErrorMessage, useTxFlow } from "@/components/TxFlow";
 import { TokenIcon, TokenPair } from "@/components/TokenIcon";
-import { useDemoMarket } from "@/hooks/useDemoMarket";
-import { usePoolState } from "@/hooks/usePoolState";
-import type { PoolState } from "@/hooks/usePoolState";
-import { useUserBalances } from "@/hooks/useUserBalances";
-import { useUserPosition } from "@/hooks/useUserPosition";
+import { useLiveData } from "@/hooks/useLiveData";
+import type { PoolLive, UserLive } from "@/hooks/useLiveData";
 import { ERC20_ABI } from "@/lib/abi/erc20";
 import { HOOK_ABI } from "@/lib/abi/hook";
 import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
@@ -53,21 +50,20 @@ export default function MarketDetailPage() {
 // ════════════════════════════════════════════════════════════════════════
 
 function DemoMarketDetail() {
-  const { stats } = useDemoMarket();
-  const { position, isConnected } = useUserPosition();
-  const { balances, refetch: refetchBalances } = useUserBalances();
+  const { isConnected } = useAccount();
+  const { pool, user, refetch: refetchLive } = useLiveData();
 
-  const supplyUsd = stats ? wadToNum(stats.totalAssetsWad) : 0;
-  const util = stats ? wadToNum(stats.utilizationWad) : 0;
+  const supplyUsd = pool ? wadToNum(pool.totalAssetsUsdWad) : 0;
+  const util = pool ? wadToNum(pool.utilizationWad) : 0;
   const borrowedUsd = supplyUsd * util;
   const availableUsd = supplyUsd - borrowedUsd;
-  const supplyApy = stats ? wadToNum(stats.lendingApyWad) * 100 : 0;
-  const borrowApy = stats ? wadToNum(stats.borrowApyWad) * 100 : 0;
+  const supplyApy = pool ? wadToNum(pool.lendingApyWad) * 100 : 0;
+  const borrowApy = pool ? wadToNum(pool.borrowApyWad) * 100 : 0;
 
-  const userSupplied = position ? wadToNum(position.suppliedUsdWad) : 0;
-  const userDebt = position ? wadToNum(position.debtUsdWad) : 0;
-  const userDebtRaw = position ? rawToNum(position.debtRaw, DEMO_POOL.decimals0) : 0;
-  const hf = position?.hfWad != null ? wadToNum(position.hfWad) : null;
+  const userSupplied = user ? wadToNum(user.suppliedUsdWad) : 0;
+  const userDebt = user ? wadToNum(user.debtUsdWad) : 0;
+  const userDebtRaw = user ? rawToNum(user.debtRaw, DEMO_POOL.decimals0) : 0;
+  const hf = user?.hfWad != null ? wadToNum(user.hfWad) : null;
   const hfKind = hf == null ? "ok" : hf >= 1.5 ? "ok" : hf >= 1.1 ? "warn" : "bad";
 
   return (
@@ -202,17 +198,19 @@ function DemoMarketDetail() {
         {/* RIGHT: action panels */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <CollateralPanel
-            balances={balances}
-            refetchBalances={refetchBalances}
+            user={user}
+            pool={pool}
+            refetchLive={refetchLive}
             isConnected={isConnected}
             suppliedUsd={userSupplied}
             debtUsd={userDebt}
           />
           <DebtPanel
-            balances={balances}
-            refetchBalances={refetchBalances}
+            user={user}
+            pool={pool}
+            refetchLive={refetchLive}
             isConnected={isConnected}
-            debtRaw={position?.debtRaw ?? 0n}
+            debtRaw={user?.debtRaw ?? 0n}
             suppliedUsd={userSupplied}
             debtUsd={userDebt}
           />
@@ -227,8 +225,9 @@ function DemoMarketDetail() {
 // ════════════════════════════════════════════════════════════════════════
 
 interface CollateralPanelProps {
-  balances: ReturnType<typeof useUserBalances>["balances"];
-  refetchBalances: () => void;
+  user: UserLive | null;
+  pool: PoolLive | null;
+  refetchLive: () => Promise<void>;
   isConnected: boolean;
   suppliedUsd: number;
   debtUsd: number;
@@ -253,12 +252,11 @@ function CollateralPanel(props: CollateralPanelProps) {
   );
 }
 
-function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelProps) {
+function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelProps) {
   // Linked inputs — both stay editable, typing in either recomputes the
   // sibling from the pool's spot ratio.
   const [amount0, setAmount0] = useState("");
   const [amount1, setAmount1] = useState("");
-  const { state: pool } = usePoolState();
 
   const handleChange0 = (v: string) => {
     setAmount0(v);
@@ -278,8 +276,8 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
   const parsed0 = parseAmount(amount0, DEMO_POOL.decimals0);
   const parsed1 = parseAmount(amount1, DEMO_POOL.decimals1);
   const haveAmounts = parsed0 != null && parsed0 > 0n && parsed1 != null && parsed1 > 0n;
-  const insufBal0 = balances && parsed0 != null && parsed0 > balances.usdt0Balance;
-  const insufBal1 = balances && parsed1 != null && parsed1 > balances.xethBalance;
+  const insufBal0 = user && parsed0 != null && parsed0 > user.usdt0Balance;
+  const insufBal1 = user && parsed1 != null && parsed1 > user.xethBalance;
 
   const flow = useTxFlow();
   const chainId = useChainId();
@@ -289,9 +287,9 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
   const [busy, setBusy] = useState(false);
 
   const submitSupply = async () => {
-    if (!balances || !client || !haveAmounts) return;
-    const needs0 = parsed0! > balances.usdt0PermitAllowance;
-    const needs1 = parsed1! > balances.xethPermitAllowance;
+    if (!user || !client || !haveAmounts) return;
+    const needs0 = parsed0! > user.usdt0PermitAllowance;
+    const needs1 = parsed1! > user.xethPermitAllowance;
 
     const steps = [
       ...(needs0 ? [{ key: "ap0", label: `Approve ${DEMO_POOL.symbol0} for Permit2` }] : []),
@@ -360,7 +358,7 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
       flow.setStep("tx", { status: "done" });
       flow.done();
 
-      refetchBalances();
+      refetchLive();
       setAmount0("");
       setAmount1("");
     } catch (e) {
@@ -390,7 +388,7 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
         decimals={DEMO_POOL.decimals0}
         value={amount0}
         onChange={handleChange0}
-        balanceRaw={balances?.usdt0Balance}
+        balanceRaw={user?.usdt0Balance}
       />
       <div style={{ height: 8 }} />
       <AmountInput
@@ -399,7 +397,7 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
         decimals={DEMO_POOL.decimals1}
         value={amount1}
         onChange={handleChange1}
-        balanceRaw={balances?.xethBalance}
+        balanceRaw={user?.xethBalance}
       />
       <button
         type="button"
@@ -414,12 +412,11 @@ function SupplyForm({ balances, refetchBalances, isConnected }: CollateralPanelP
   );
 }
 
-function WithdrawForm({ balances, refetchBalances, isConnected, suppliedUsd, debtUsd }: CollateralPanelProps) {
+function WithdrawForm({ user, pool, refetchLive, isConnected, suppliedUsd, debtUsd }: CollateralPanelProps) {
   // Two amount-side inputs linked through the pool ratio. Each side's Max
   // button is sized to the user's share of the vault's per-token total.
   const [amount0, setAmount0] = useState("");
   const [amount1, setAmount1] = useState("");
-  const { state: pool } = usePoolState();
 
   const handleChange0 = (v: string) => {
     setAmount0(v);
@@ -439,14 +436,14 @@ function WithdrawForm({ balances, refetchBalances, isConnected, suppliedUsd, deb
   // Withdraw max per side = userShareBalance × vaultAmount / totalShares.
   // This is the most the user could redeem if they burned every share they own.
   const { userMax0Raw, userMax1Raw } = useMemo(() => {
-    if (!pool || !balances || pool.totalShares === 0n) {
+    if (!pool || !user || pool.totalShares === 0n) {
       return { userMax0Raw: undefined, userMax1Raw: undefined };
     }
     return {
-      userMax0Raw: (balances.shareBalance * pool.vaultAmount0Raw) / pool.totalShares,
-      userMax1Raw: (balances.shareBalance * pool.vaultAmount1Raw) / pool.totalShares,
+      userMax0Raw: (user.shareBalance * pool.vaultAmount0Raw) / pool.totalShares,
+      userMax1Raw: (user.shareBalance * pool.vaultAmount1Raw) / pool.totalShares,
     };
-  }, [pool, balances]);
+  }, [pool, user]);
 
   const parsed0 = parseAmount(amount0, DEMO_POOL.decimals0);
   const sharesToBurn = useMemo(() => {
@@ -454,7 +451,7 @@ function WithdrawForm({ balances, refetchBalances, isConnected, suppliedUsd, deb
     return (parsed0 * pool.totalShares) / pool.vaultAmount0Raw;
   }, [pool, parsed0]);
 
-  const insufficient = balances && sharesToBurn > 0n && sharesToBurn > balances.shareBalance;
+  const insufficient = user && sharesToBurn > 0n && sharesToBurn > user.shareBalance;
   const hasInput = parsed0 != null && parsed0 > 0n;
   const sharesDisplay = sharesToBurn > 0n ? rawToNum(sharesToBurn, SHARE_DECIMALS) : 0;
 
@@ -491,7 +488,7 @@ function WithdrawForm({ balances, refetchBalances, isConnected, suppliedUsd, deb
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
       flow.done();
-      refetchBalances();
+      refetchLive();
       setAmount0("");
       setAmount1("");
     } catch (e) {
@@ -584,7 +581,7 @@ interface DebtPanelProps extends CollateralPanelProps {
   debtUsd: number;
 }
 
-function DebtPanel({ balances, refetchBalances, isConnected, debtRaw, suppliedUsd, debtUsd }: DebtPanelProps) {
+function DebtPanel({ user, pool, refetchLive, isConnected, debtRaw, suppliedUsd, debtUsd }: DebtPanelProps) {
   const [tab, setTab] = useState<"borrow" | "repay">("borrow");
   return (
     <section className="md-card card">
@@ -599,15 +596,16 @@ function DebtPanel({ balances, refetchBalances, isConnected, debtRaw, suppliedUs
         </div>
         {tab === "borrow" ? (
           <BorrowForm
-            refetchBalances={refetchBalances}
+            refetchLive={refetchLive}
             isConnected={isConnected}
             suppliedUsd={suppliedUsd}
             debtUsd={debtUsd}
           />
         ) : (
           <RepayForm
-            balances={balances}
-            refetchBalances={refetchBalances}
+            user={user}
+            pool={pool}
+            refetchLive={refetchLive}
             isConnected={isConnected}
             debtRaw={debtRaw}
             suppliedUsd={suppliedUsd}
@@ -620,12 +618,12 @@ function DebtPanel({ balances, refetchBalances, isConnected, debtRaw, suppliedUs
 }
 
 function BorrowForm({
-  refetchBalances,
+  refetchLive,
   isConnected,
   suppliedUsd,
   debtUsd,
 }: {
-  refetchBalances: () => void;
+  refetchLive: () => Promise<void>;
   isConnected: boolean;
   suppliedUsd: number;
   debtUsd: number;
@@ -672,7 +670,7 @@ function BorrowForm({
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
       flow.done();
-      refetchBalances();
+      refetchLive();
       setAmount("");
     } catch (e) {
       flow.fail(extractErrorMessage(e));
@@ -755,15 +753,16 @@ function BorrowForm({
 }
 
 function RepayForm({
-  balances,
-  refetchBalances,
+  user,
+  refetchLive,
   isConnected,
   debtRaw,
   suppliedUsd,
   debtUsd,
 }: {
-  balances: ReturnType<typeof useUserBalances>["balances"];
-  refetchBalances: () => void;
+  user: UserLive | null;
+  pool: PoolLive | null;
+  refetchLive: () => Promise<void>;
   isConnected: boolean;
   debtRaw: bigint;
   suppliedUsd: number;
@@ -772,7 +771,7 @@ function RepayForm({
   const [amount, setAmount] = useState("");
   const parsed = parseAmount(amount, DEMO_POOL.decimals0);
   const noDebt = debtRaw === 0n;
-  const insufficientBal = balances && parsed != null && parsed > balances.usdt0Balance;
+  const insufficientBal = user && parsed != null && parsed > user.usdt0Balance;
   const overDebt = parsed != null && parsed > debtRaw;
 
   const flow = useTxFlow();
@@ -785,9 +784,9 @@ function RepayForm({
   // Max = lesser of (wallet balance, outstanding debt) — repaying more than
   // owed is wasteful and the hook would refund anyway; staying ≤ debt keeps
   // the tx tight.
-  const maxRepayRaw = balances
-    ? balances.usdt0Balance < debtRaw
-      ? balances.usdt0Balance
+  const maxRepayRaw = user
+    ? user.usdt0Balance < debtRaw
+      ? user.usdt0Balance
       : debtRaw
     : 0n;
 
@@ -798,8 +797,8 @@ function RepayForm({
   const projectedHfKind = projectedHf >= 1.5 ? "ok" : projectedHf >= 1.1 ? "warn" : "bad";
 
   const runRepay = async (rawAmount: bigint) => {
-    if (!balances || !client) return;
-    const needsApprove = rawAmount > balances.usdt0PermitAllowance;
+    if (!user || !client) return;
+    const needsApprove = rawAmount > user.usdt0PermitAllowance;
     const steps = [
       ...(needsApprove ? [{ key: "ap", label: `Approve ${DEMO_POOL.symbol0} for Permit2` }] : []),
       { key: "sig", label: `Sign Permit2 (${DEMO_POOL.symbol0})` },
@@ -850,7 +849,7 @@ function RepayForm({
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
       flow.done();
-      refetchBalances();
+      refetchLive();
       setAmount("");
     } catch (e) {
       flow.fail(extractErrorMessage(e));

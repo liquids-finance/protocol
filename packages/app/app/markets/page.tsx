@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { TokenPair } from "@/components/TokenIcon";
-import { useDemoMarket } from "@/hooks/useDemoMarket";
+import { useLiveData } from "@/hooks/useLiveData";
 import { fmtCompact, fmtPct, wadToNum } from "@/lib/format";
 import { MARKETS } from "@/lib/markets";
 import type { Market } from "@/lib/markets";
@@ -22,20 +22,20 @@ export default function MarketsPage() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "supply", dir: "desc" });
 
-  const { stats } = useDemoMarket();
+  const { pool } = useLiveData();
 
   // Replace the first matching seed row (xETH / USDT0 on X Layer) with live
-  // numbers from the Lens. Falls back to seed values until the multicall
-  // resolves so the table is never empty.
+  // numbers. Falls back to seed values until the multicall resolves so the
+  // table is never empty.
   const liveMarket: Market = useMemo(() => {
     const seed = MARKETS.find(
       (m) => m.coll === DEMO_POOL.symbol1 && m.loan === DEMO_POOL.symbol0 && m.chain === "X Layer"
     ) ?? MARKETS[0];
 
-    if (!stats) return { ...seed, isLive: true };
+    if (!pool) return { ...seed, isLive: true };
 
-    const supplyUsd = wadToNum(stats.totalAssetsWad);
-    const util = wadToNum(stats.utilizationWad);
+    const supplyUsd = wadToNum(pool.totalAssetsUsdWad);
+    const util = wadToNum(pool.utilizationWad);
     const borrowedUsd = supplyUsd * util;
     return {
       ...seed,
@@ -45,12 +45,12 @@ export default function MarketsPage() {
       supply: supplyUsd,
       liquidity: supplyUsd - borrowedUsd,
       util,
-      supplyApy: wadToNum(stats.lendingApyWad) * 100,
-      borrowApy: wadToNum(stats.borrowApyWad) * 100,
+      supplyApy: wadToNum(pool.lendingApyWad) * 100,
+      borrowApy: wadToNum(pool.borrowApyWad) * 100,
       badge: "core",
       isLive: true,
     };
-  }, [stats]);
+  }, [pool]);
 
   const rows = useMemo(() => {
     // Only live markets render — preview rows would be misleading and we

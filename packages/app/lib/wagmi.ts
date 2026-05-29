@@ -62,31 +62,41 @@ export const wagmiConfig = getDefaultConfig({
       wallets: [walletConnectWallet, rainbowWallet, trustWallet],
     },
   ],
-  // Four browser-CORS-allowing X Layer RPCs behind a viem `fallback`.
+  // Browser-CORS-allowing X Layer RPCs behind a viem `fallback`.
   //
-  //   • `batch: { batchSize, wait }` on every transport — coalesces every
-  //     JSON-RPC call fired within `wait` ms into ONE HTTP POST. With all
-  //     hooks polling (multicalls + activity getLogs + price reads), this
-  //     drops outbound traffic by ~10x.
+  // ⚠️ `batch` is INTENTIONALLY OFF. Two reasons:
+  //
+  //   1. Multicall3 (configured on the chain in `chains.ts`) already
+  //      collapses every multi-read into ONE on-chain `eth_call`, so the
+  //      JSON-RPC batch layer adds almost no traffic savings.
+  //
+  //   2. X Layer's public RPCs occasionally return a JSON-RPC batch
+  //      response with a missing entry (one of the requests in the array
+  //      just isn't there in the reply). viem 2.51's batch parser then
+  //      crashes at http.ts:169 with
+  //         `Cannot read properties of undefined (reading 'error')`
+  //      because `body.find(r => r.id === id)` came back undefined.
+  //      That single broken response cascades into every read failing,
+  //      blanking the entire dashboard. Disabling batch makes each
+  //      eth_call its own POST — slower in theory, but the Multicall3
+  //      consolidation already gives us the win.
   //
   //   • `rank: { interval }` — viem pings the RPCs every minute, scores
   //     them on latency + success, and routes new requests to the
-  //     healthiest. The previous `rank: false` re-attempted the official
-  //     endpoint on every call and bounced to OKX on each 429 — the other
-  //     two mirrors were never tried.
+  //     healthiest one.
   //
-  // publicnode is intentionally omitted: it doesn't send CORS headers and
-  // the browser blocks every preflight.
+  // publicnode is omitted: no CORS headers, the browser blocks every
+  // preflight.
   transports: {
     [xLayer.id]: fallback(
       [
-        http("https://rpc.xlayer.tech",     { batch: { batchSize: 256, wait: 32 } }),
-        http("https://xlayerrpc.okx.com",   { batch: { batchSize: 256, wait: 32 } }),
+        http("https://rpc.xlayer.tech"),
+        http("https://xlayerrpc.okx.com"),
       ],
       {
         rank: { interval: 60_000 },
-        retryCount: 1,
-        retryDelay: 150,
+        retryCount: 2,
+        retryDelay: 200,
       }
     ),
   },

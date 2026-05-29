@@ -21,12 +21,25 @@ export const xLayer = defineChain({
       http: [
         "https://rpc.xlayer.tech",
         "https://xlayerrpc.okx.com",
-        "https://rpc.ankr.com/xlayer",
       ],
     },
   },
   blockExplorers: {
     default: { name: "OKLink", url: "https://www.oklink.com/x-layer" },
+  },
+  // Canonical Multicall3 — same address on every chain it ships to,
+  // X Layer included (verified: contract bytecode present). Wagmi's
+  // `useReadContracts` uses this to fold N reads into ONE on-chain
+  // `aggregate3` call, which is the only thing keeping the polling
+  // tick from hammering the public RPCs hard enough to trip their
+  // rate limit (they answer 403, not 429). blockCreated kept at 0
+  // so viem never disables multicall on the off chance our metadata
+  // is wrong — the address is canonical, it exists.
+  contracts: {
+    multicall3: {
+      address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+      blockCreated: 0,
+    },
   },
   testnet: false,
 });

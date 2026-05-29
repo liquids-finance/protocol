@@ -4,46 +4,37 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
+import { useAccount } from "wagmi";
 
 import { TokenIcon, TokenPair } from "@/components/TokenIcon";
 import { useTicker } from "@/components/useTicker";
-import { useActivityFeed, relativeTime } from "@/hooks/useActivityFeed";
-import type { ActivityEntry, ActivityType } from "@/hooks/useActivityFeed";
-import { useDemoMarket } from "@/hooks/useDemoMarket";
-import { useUserPosition } from "@/hooks/useUserPosition";
+import { useLiveData } from "@/hooks/useLiveData";
 import { fmtNum, fmtPct, fmtUSD, rawToNum, wadToNum } from "@/lib/format";
-import { DEMO_POOL, OKLINK_TX } from "@/lib/contracts";
-
-const TYPE_ICONS: Record<ActivityType, { sym: string; kind: string }> = {
-  Supplied: { sym: "↓", kind: "primary" },
-  Withdrew: { sym: "↑", kind: "neutral" },
-  Borrowed: { sym: "→", kind: "accent" },
-  Repaid:   { sym: "←", kind: "ok" },
-};
+import { DEMO_POOL } from "@/lib/contracts";
 
 const PAIR_LABEL = `${DEMO_POOL.symbol1} / ${DEMO_POOL.symbol0}`;
 const MARKET_SLUG = `${DEMO_POOL.symbol1.toLowerCase()}-${DEMO_POOL.symbol0.toLowerCase()}`;
 const MAX_LTV = 0.86;
 
 export default function DashboardPage() {
-  const { position, isConnected } = useUserPosition();
-  const { stats } = useDemoMarket();
+  const { isConnected } = useAccount();
+  const { pool, user } = useLiveData();
 
   const view = useMemo(() => {
     if (!isConnected) return { state: "disconnected" as const };
-    if (!position) return { state: "loading" as const };
+    if (!user || !pool) return { state: "loading" as const };
 
-    const suppliedUsd = wadToNum(position.suppliedUsdWad);
-    const debtUsd = wadToNum(position.debtUsdWad);
-    const debtAmount = rawToNum(position.debtRaw, DEMO_POOL.decimals0);
+    const suppliedUsd = wadToNum(user.suppliedUsdWad);
+    const debtUsd = wadToNum(user.debtUsdWad);
+    const debtAmount = rawToNum(user.debtRaw, DEMO_POOL.decimals0);
     const netWorth = suppliedUsd - debtUsd;
 
     if (suppliedUsd === 0 && debtUsd === 0) {
       return { state: "empty" as const };
     }
 
-    const supplyApy = stats ? wadToNum(stats.lendingApyWad) * 100 : 0;
-    const borrowApy = stats ? wadToNum(stats.borrowApyWad) * 100 : 0;
+    const supplyApy = wadToNum(pool.lendingApyWad) * 100;
+    const borrowApy = wadToNum(pool.borrowApyWad) * 100;
 
     const supEarn = (suppliedUsd * supplyApy) / 100;
     const borCost = (debtUsd * borrowApy) / 100;
@@ -51,7 +42,7 @@ export default function DashboardPage() {
 
     const borrowPower = suppliedUsd * MAX_LTV;
     const used = borrowPower > 0 ? Math.min(1, debtUsd / borrowPower) : 0;
-    const hf = position.hfWad != null ? wadToNum(position.hfWad) : Infinity;
+    const hf = user.hfWad != null ? wadToNum(user.hfWad) : Infinity;
     const hfKind = hf >= 1.5 ? "ok" : hf >= 1.1 ? "warn" : "bad";
 
     return {
@@ -67,7 +58,7 @@ export default function DashboardPage() {
       hfKind,
       used,
     };
-  }, [isConnected, position, stats]);
+  }, [isConnected, user, pool]);
 
   if (view.state === "disconnected") return <DisconnectedState />;
   if (view.state === "loading") return <LoadingState />;
@@ -77,7 +68,7 @@ export default function DashboardPage() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Active positions — live data from Lens + share token reads
+//   Active positions — derived view from useLiveData
 // ════════════════════════════════════════════════════════════════════════
 
 interface ActiveView {
@@ -197,8 +188,33 @@ function ActivePositionsView({ view }: { view: ActiveView }) {
         </PositionCard>
       </div>
 
-      <ActivityCardLive />
+      <ActivityComingSoon />
     </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//   Activity — placeholder until proper event indexing is wired
+// ════════════════════════════════════════════════════════════════════════
+
+function ActivityComingSoon() {
+  return (
+    <section className="hist-card card" style={{ marginTop: 18 }}>
+      <header className="hist-head">
+        <h3 className="display">Activity</h3>
+        <span style={{ color: "var(--text-mid)", fontSize: 11, letterSpacing: ".04em", textTransform: "uppercase" }}>
+          Coming soon
+        </span>
+      </header>
+      <div className="empty-state">
+        <span className="empty-bullet empty-bullet-mute" />
+        <strong>Event-stream indexer in progress.</strong>
+        <span className="empty-sub">
+          Your supply, withdraw, borrow and repay history will appear here once we wire it up to a
+          dedicated indexer. (Public RPCs throttle log queries too aggressively for a real-time feed.)
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -289,7 +305,7 @@ function EmptyState() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//   Reusable sub-components
+//   Reusable position card
 // ════════════════════════════════════════════════════════════════════════
 
 interface PositionCardProps {
@@ -328,58 +344,5 @@ function PositionCard({ title, eyebrow, cols, isEmpty, emptyMsg, children }: Pos
         </div>
       )}
     </section>
-  );
-}
-
-function ActivityCardLive() {
-  const { entries, isLoading } = useActivityFeed();
-  return (
-    <section className="hist-card card" style={{ marginTop: 18 }}>
-      <header className="hist-head">
-        <h3 className="display">Activity</h3>
-      </header>
-      {entries.length === 0 ? (
-        <div className="empty-state">
-          <strong>{isLoading ? "Loading recent activity…" : "No activity yet."}</strong>
-          <span className="empty-sub">
-            Your supply, borrow and repay transactions appear here as soon as they confirm.
-          </span>
-        </div>
-      ) : (
-        <ul className="hist-list">
-          {entries.slice(0, 8).map((e) => (
-            <ActivityRow key={e.txHash} entry={e} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function ActivityRow({ entry }: { entry: ActivityEntry }) {
-  const meta = TYPE_ICONS[entry.type];
-  return (
-    <li className="hist-item">
-      <span className={`hist-icon hist-icon-${meta.kind}`}>{meta.sym}</span>
-      <span className="hist-meta">
-        <span className="hist-type">{entry.type}</span>
-        <span className="hist-amt mono">
-          {entry.market} ·{" "}
-          <a
-            href={OKLINK_TX(entry.txHash)}
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: "inherit", textDecoration: "none" }}
-            title={entry.txHash}
-          >
-            {relativeTime(entry.timestamp)} ↗
-          </a>
-        </span>
-      </span>
-      <span className="hist-right">
-        <span className="hist-amount mono">{entry.amount}</span>
-        <span className="hist-usd mono">{entry.usd}</span>
-      </span>
-    </li>
   );
 }
