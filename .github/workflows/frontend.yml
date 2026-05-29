@@ -1,0 +1,71 @@
+name: Frontend
+
+permissions: {}
+
+on:
+  push:
+    paths:
+      - "packages/app/**"
+      - "packages/landing/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    paths:
+      - "packages/app/**"
+      - "packages/landing/**"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+jobs:
+  app:
+    name: app — typecheck + build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace deps
+        run: bun install --frozen-lockfile
+        working-directory: .
+
+      - run: bun run typecheck
+      - run: bun run build
+        env:
+          NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${{ secrets.WALLETCONNECT_PROJECT_ID }}
+
+  landing:
+    name: landing — typecheck + build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/landing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install workspace deps
+        run: bun install --frozen-lockfile
+        working-directory: .
+
+      - run: bun run typecheck
+      - run: bun run build

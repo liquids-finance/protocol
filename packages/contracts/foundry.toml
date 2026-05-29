@@ -1,0 +1,47 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+script = "script"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1
+via_ir = true
+bytecode_hash = "none"
+fs_permissions = [{ access = "read-write", path = "./" }]
+
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@uniswap/v4-core/=lib/v4-core/",
+  "v4-core/=lib/v4-core/src/",
+  "v4-periphery/=lib/v4-periphery/src/",
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "openzeppelin-contracts/=lib/openzeppelin-contracts/",
+  "solmate/=lib/v4-core/lib/solmate/",
+]
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+
+[rpc_endpoints]
+x_layer_testnet = "${X_LAYER_TESTNET_RPC}"
+x_layer_mainnet = "${X_LAYER_MAINNET_RPC}"
+
+# Source-verification through OKLink's Etherscan-compat plugin endpoint.
+# chainShortName values confirmed from OKLink's supported-chains docs:
+#   - X Layer mainnet → XLAYER (chain id 196)
+#   - X Layer testnet → XLAYER_TESTNET (chain id 195)
+# NOTE: OKLink does NOT require an API key for this endpoint (confirmed against the OKX/X Layer
+# Foundry verify docs — no --etherscan-api-key flag is shown). Foundry's TOML schema still wants
+# a `key` field, so we pass an empty string. Used by:
+#   forge verify-contract <addr> <Path:Contract> --chain 196 --verifier oklink --watch
+# Foundry's --chain only accepts built-in names from its enum (X Layer is not in it), so pass
+# the chain ID numerically — Foundry matches the [etherscan] entry via its `chain` field.
+[etherscan]
+x_layer_mainnet = { key = "", url = "https://www.oklink.com/api/v5/explorer/contract/verify-source-code-plugin/XLAYER", chain = 196 }
+x_layer_testnet = { key = "", url = "https://www.oklink.com/api/v5/explorer/contract/verify-source-code-plugin/XLAYER_TESTNET", chain = 195 }

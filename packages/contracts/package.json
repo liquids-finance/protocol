@@ -1,0 +1,10 @@
+{
+  "name": "@liquidsfi/contracts",
+  "private": true,
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "clean": "forge clean",
+    "fmt": "forge fmt"
+  }
+}

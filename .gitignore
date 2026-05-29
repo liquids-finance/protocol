@@ -1,0 +1,33 @@
+# Foundry artifacts
+**/cache/
+**/out/
+**/broadcast/*/31337/
+**/broadcast/**/dry-run/
+
+# Node / Bun
+node_modules/
+.next/
+.turbo/
+dist/
+build/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+
+# Logs and dev
+.logs/
+.ignore/
+docs/
+
+# Env
+.env
+.env.*
+!.env.example

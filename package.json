@@ -1,0 +1,5 @@
+{
+  "name": "liquidsfi",
+  "private": true,
+  "workspaces": ["packages/*"]
+}

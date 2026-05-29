@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  /* Ghibli sky palette — moody warm peach family. */
+  --color-skyTop: #d8b191;
+  --color-skyMid: #d3a98a;
+  --color-skyLow: #8fb0b6;
+
+  /* Warm dark text color. */
+  --color-ink: #2a2118;
+
+  /* Inter loaded via next/font in layout.tsx. */
+  --font-display: var(--font-inter), system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+}
+
+html, body {
+  /* Four-layer background stack, painted FRONT → back:
+   *   1) Faint horizontal grid lines (technical / financial texture).
+   *   2) Faint vertical grid lines.
+   *   3) Sun glow — bright cream-yellow radial anchored at 14%, 8% (top-left)
+   *      so the whole scene has a directional light source. The rest of the
+   *      sky inherits the warm linear gradient below.
+   *   4) Original warm Ghibli sky gradient (the base color stops).
+   */
+  background:
+    linear-gradient(rgba(75, 50, 30, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(75, 50, 30, 0.028) 1px, transparent 1px),
+    radial-gradient(
+      ellipse 75% 55% at 14% 8%,
+      rgba(255, 252, 220, 0.95) 0%,
+      rgba(255, 248, 205, 0.65) 11%,
+      rgba(255, 242, 190, 0.32) 26%,
+      rgba(255, 240, 190, 0.10) 42%,
+      rgba(255, 240, 190, 0) 60%
+    ),
+    linear-gradient(
+      180deg,
+      var(--color-skyTop) 0%,
+      #d5ad8d 24%,
+      var(--color-skyMid) 48%,
+      #c99b7d 64%,
+      #b5aea1 82%,
+      var(--color-skyLow) 100%
+    );
+  background-size:
+    44px 44px,
+    44px 44px,
+    100% 100%,
+    100% 100%;
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes underwaterFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
