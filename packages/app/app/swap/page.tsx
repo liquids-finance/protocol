@@ -3,6 +3,7 @@
 import { maxUint256 } from "viem";
 import { useMemo, useState } from "react";
 import {
+  useAccount,
   useChainId,
   useGasPrice,
   usePublicClient,
@@ -17,6 +18,7 @@ import { useLiveData } from "@/hooks/useLiveData";
 import { useOkbPriceUsd } from "@/hooks/useOkbPriceUsd";
 import { useQuote } from "@/hooks/useQuote";
 import { ERC20_ABI } from "@/lib/abi/erc20";
+import { estimateGasWithBuffer } from "@/lib/tx/estimateGas";
 import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
 import {
   UNIVERSAL_ROUTER_ABI,
@@ -115,13 +117,14 @@ export default function SwapPage() {
   // ─── Write path — one async submit that walks the TxFlow modal ───────
   const flow = useTxFlow();
   const client = usePublicClient();
+  const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const { writeContractAsync } = useWriteContract();
   const chainId = useChainId();
   const [busy, setBusy] = useState(false);
 
   const onSwap = async () => {
-    if (!quote || parsedSell == null || !client || !urPermit) return;
+    if (!quote || parsedSell == null || !client || !urPermit || !address) return;
     const swapInput = encodeExactInputSingle({
       poolKey: DEMO_POOL_KEY,
       zeroForOne,
@@ -141,12 +144,14 @@ export default function SwapPage() {
     try {
       if (needsErc20Approve) {
         flow.setStep("ap", { status: "pending" });
-        const hash = await writeContractAsync({
+        const apParams = {
           address: sellTok.address,
           abi: ERC20_ABI,
-          functionName: "approve",
-          args: [CONTRACTS.permit2, maxUint256],
-        });
+          functionName: "approve" as const,
+          args: [CONTRACTS.permit2, maxUint256] as const,
+        };
+        const apGas = await estimateGasWithBuffer(client, { ...apParams, account: address });
+        const hash = await writeContractAsync({ ...apParams, gas: apGas });
         flow.setStep("ap", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap", { status: "done" });
@@ -178,19 +183,21 @@ export default function SwapPage() {
       }
 
       flow.setStep("tx", { status: "pending" });
-      const hash = permitInput
-        ? await writeContractAsync({
+      const swapParams = permitInput
+        ? {
             address: CONTRACTS.universalRouter,
             abi: UNIVERSAL_ROUTER_ABI,
-            functionName: "execute",
-            args: [UR_COMMAND_PERMIT_AND_V4_SWAP, [permitInput, swapInput], deadline],
-          })
-        : await writeContractAsync({
+            functionName: "execute" as const,
+            args: [UR_COMMAND_PERMIT_AND_V4_SWAP, [permitInput, swapInput], deadline] as const,
+          }
+        : {
             address: CONTRACTS.universalRouter,
             abi: UNIVERSAL_ROUTER_ABI,
-            functionName: "execute",
-            args: [UR_COMMAND_V4_SWAP, [swapInput], deadline],
-          });
+            functionName: "execute" as const,
+            args: [UR_COMMAND_V4_SWAP, [swapInput], deadline] as const,
+          };
+      const swapGas = await estimateGasWithBuffer(client, { ...swapParams, account: address });
+      const hash = await writeContractAsync({ ...swapParams, gas: swapGas });
       flow.setStep("tx", { txHash: hash });
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });

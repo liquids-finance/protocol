@@ -16,6 +16,7 @@ import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
 import { CONTRACTS, DEMO_POOL, OKLINK_ADDRESS } from "@/lib/contracts";
 import { fmtCompact, fmtNum, fmtPct, fmtUSD, rawToNum, shortAddr, wadToNum } from "@/lib/format";
 import { parseAmount } from "@/lib/parse";
+import { estimateGasWithBuffer } from "@/lib/tx/estimateGas";
 import {
   DEFAULT_SIG_DEADLINE_SECONDS,
   PERMIT_BATCH_TRANSFER_FROM_TYPES,
@@ -282,12 +283,13 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
   const flow = useTxFlow();
   const chainId = useChainId();
   const client = usePublicClient();
+  const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
 
   const submitSupply = async () => {
-    if (!user || !client || !haveAmounts) return;
+    if (!user || !client || !haveAmounts || !address) return;
     const needs0 = parsed0! > user.usdt0PermitAllowance;
     const needs1 = parsed1! > user.xethPermitAllowance;
 
@@ -303,24 +305,28 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
     try {
       if (needs0) {
         flow.setStep("ap0", { status: "pending" });
-        const hash = await writeContractAsync({
+        const ap0Params = {
           address: DEMO_POOL.currency0,
           abi: ERC20_ABI,
-          functionName: "approve",
-          args: [CONTRACTS.permit2, maxUint256],
-        });
+          functionName: "approve" as const,
+          args: [CONTRACTS.permit2, maxUint256] as const,
+        };
+        const ap0Gas = await estimateGasWithBuffer(client, { ...ap0Params, account: address });
+        const hash = await writeContractAsync({ ...ap0Params, gas: ap0Gas });
         flow.setStep("ap0", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap0", { status: "done" });
       }
       if (needs1) {
         flow.setStep("ap1", { status: "pending" });
-        const hash = await writeContractAsync({
+        const ap1Params = {
           address: DEMO_POOL.currency1,
           abi: ERC20_ABI,
-          functionName: "approve",
-          args: [CONTRACTS.permit2, maxUint256],
-        });
+          functionName: "approve" as const,
+          args: [CONTRACTS.permit2, maxUint256] as const,
+        };
+        const ap1Gas = await estimateGasWithBuffer(client, { ...ap1Params, account: address });
+        const hash = await writeContractAsync({ ...ap1Params, gas: ap1Gas });
         flow.setStep("ap1", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap1", { status: "done" });
@@ -347,12 +353,14 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
       flow.setStep("sig", { status: "done" });
 
       flow.setStep("tx", { status: "pending" });
-      const hash = await writeContractAsync({
+      const supplyParams = {
         address: CONTRACTS.hook,
         abi: HOOK_ABI,
-        functionName: "supplyWithPermit2",
-        args: [DEMO_POOL_KEY, parsed0!, parsed1!, 0n, message, sig],
-      });
+        functionName: "supplyWithPermit2" as const,
+        args: [DEMO_POOL_KEY, parsed0!, parsed1!, 0n, message, sig] as const,
+      };
+      const supplyGas = await estimateGasWithBuffer(client, { ...supplyParams, account: address });
+      const hash = await writeContractAsync({ ...supplyParams, gas: supplyGas });
       flow.setStep("tx", { txHash: hash });
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
@@ -469,21 +477,24 @@ function WithdrawForm({ user, pool, refetchLive, isConnected, suppliedUsd, debtU
 
   const flow = useTxFlow();
   const client = usePublicClient();
+  const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (sharesToBurn === 0n || !client) return;
+    if (sharesToBurn === 0n || !client || !address) return;
     flow.start("Withdraw", [{ key: "tx", label: "Burn LP shares + receive tokens" }]);
     setBusy(true);
     try {
       flow.setStep("tx", { status: "pending" });
-      const hash = await writeContractAsync({
+      const withdrawParams = {
         address: CONTRACTS.hook,
         abi: HOOK_ABI,
-        functionName: "withdraw",
-        args: [DEMO_POOL_KEY, sharesToBurn, 0n, 0n],
-      });
+        functionName: "withdraw" as const,
+        args: [DEMO_POOL_KEY, sharesToBurn, 0n, 0n] as const,
+      };
+      const withdrawGas = await estimateGasWithBuffer(client, { ...withdrawParams, account: address });
+      const hash = await writeContractAsync({ ...withdrawParams, gas: withdrawGas });
       flow.setStep("tx", { txHash: hash });
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
@@ -651,21 +662,24 @@ function BorrowForm({
 
   const flow = useTxFlow();
   const client = usePublicClient();
+  const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (parsed == null || parsed === 0n || !client) return;
+    if (parsed == null || parsed === 0n || !client || !address) return;
     flow.start("Borrow", [{ key: "tx", label: `Borrow ${DEMO_POOL.symbol0}` }]);
     setBusy(true);
     try {
       flow.setStep("tx", { status: "pending" });
-      const hash = await writeContractAsync({
+      const borrowParams = {
         address: CONTRACTS.hook,
         abi: HOOK_ABI,
-        functionName: "borrow",
-        args: [DEMO_POOL_KEY, parsed, 0n],
-      });
+        functionName: "borrow" as const,
+        args: [DEMO_POOL_KEY, parsed, 0n] as const,
+      };
+      const borrowGas = await estimateGasWithBuffer(client, { ...borrowParams, account: address });
+      const hash = await writeContractAsync({ ...borrowParams, gas: borrowGas });
       flow.setStep("tx", { txHash: hash });
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
@@ -777,6 +791,7 @@ function RepayForm({
   const flow = useTxFlow();
   const chainId = useChainId();
   const client = usePublicClient();
+  const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
@@ -797,7 +812,7 @@ function RepayForm({
   const projectedHfKind = projectedHf >= 1.5 ? "ok" : projectedHf >= 1.1 ? "warn" : "bad";
 
   const runRepay = async (rawAmount: bigint) => {
-    if (!user || !client) return;
+    if (!user || !client || !address) return;
     const needsApprove = rawAmount > user.usdt0PermitAllowance;
     const steps = [
       ...(needsApprove ? [{ key: "ap", label: `Approve ${DEMO_POOL.symbol0} for Permit2` }] : []),
@@ -810,12 +825,14 @@ function RepayForm({
     try {
       if (needsApprove) {
         flow.setStep("ap", { status: "pending" });
-        const hash = await writeContractAsync({
+        const apParams = {
           address: DEMO_POOL.currency0,
           abi: ERC20_ABI,
-          functionName: "approve",
-          args: [CONTRACTS.permit2, maxUint256],
-        });
+          functionName: "approve" as const,
+          args: [CONTRACTS.permit2, maxUint256] as const,
+        };
+        const apGas = await estimateGasWithBuffer(client, { ...apParams, account: address });
+        const hash = await writeContractAsync({ ...apParams, gas: apGas });
         flow.setStep("ap", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap", { status: "done" });
@@ -839,12 +856,14 @@ function RepayForm({
       flow.setStep("sig", { status: "done" });
 
       flow.setStep("tx", { status: "pending" });
-      const hash = await writeContractAsync({
+      const repayParams = {
         address: CONTRACTS.hook,
         abi: HOOK_ABI,
-        functionName: "repayWithPermit2",
-        args: [DEMO_POOL_KEY, rawAmount, message, sig],
-      });
+        functionName: "repayWithPermit2" as const,
+        args: [DEMO_POOL_KEY, rawAmount, message, sig] as const,
+      };
+      const repayGas = await estimateGasWithBuffer(client, { ...repayParams, account: address });
+      const hash = await writeContractAsync({ ...repayParams, gas: repayGas });
       flow.setStep("tx", { txHash: hash });
       await client.waitForTransactionReceipt({ hash });
       flow.setStep("tx", { status: "done" });
