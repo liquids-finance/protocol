@@ -611,6 +611,7 @@ function DebtPanel({ user, pool, refetchLive, isConnected, debtRaw, suppliedUsd,
         </div>
         {tab === "borrow" ? (
           <BorrowForm
+            pool={pool}
             refetchLive={refetchLive}
             isConnected={isConnected}
             suppliedUsd={suppliedUsd}
@@ -633,11 +634,13 @@ function DebtPanel({ user, pool, refetchLive, isConnected, debtRaw, suppliedUsd,
 }
 
 function BorrowForm({
+  pool,
   refetchLive,
   isConnected,
   suppliedUsd,
   debtUsd,
 }: {
+  pool: PoolLive | null;
   refetchLive: () => Promise<void>;
   isConnected: boolean;
   suppliedUsd: number;
@@ -646,10 +649,36 @@ function BorrowForm({
   const [amount, setAmount] = useState("");
   const parsed = parseAmount(amount, DEMO_POOL.decimals0);
 
-  // USDT0 ≈ $1 — the Lens does exact oracle pricing on-chain; the UI estimate
-  // is fine for sizing. Hard cap at $0 so a depleted position doesn't render
-  // a negative max.
-  const maxBorrowUsd = Math.max(0, suppliedUsd * (MAX_LTV_PCT / 100) - debtUsd);
+  // Max borrow is the lesser of three caps:
+  //
+  //   1. LTV gate — `userCollateralUsd × MAX_LTV - existingDebtUsd`.
+  //      Mirrors `if (totalDebtAfterWad * BPS_DENOM > userCollateralWad
+  //      * MAX_LTV_BPS) revert LTVExceeded()` in LiquidsHook.sol.
+  //
+  //   2. Pool availability — `totalAssetsUsd × (1 - utilization)`.
+  //      Mirrors `if (v4ValueWad < newDrawWad) revert
+  //      InsufficientLiquidity()` — the borrow handler pulls from the
+  //      V4 position, so the draw can't exceed what's currently sitting
+  //      in V4 (≈ total assets minus what's already on loan).
+  //
+  //   3. A 1 % safety multiplier on the min of (1) and (2). Three things
+  //      can make the on-chain numbers tighter than the UI snapshot:
+  //        • interest accrual between the 8 s poll and tx mining lifts
+  //          existingDebtUsd
+  //        • the Lens oracle prices USDT0 with a few-bps deviation from
+  //          $1, so newDrawWad can land slightly above amountUsd
+  //        • V4 swap rounding inside the borrow handler can cap
+  //          actualBorrowed a few units below the request
+  //      All three move in the direction that erodes a max-at-the-cap
+  //      borrow, so the multiplier is one-sided (no inflation when the
+  //      snapshot would be tighter).
+  const ltvCapUsd = Math.max(0, suppliedUsd * (MAX_LTV_PCT / 100) - debtUsd);
+  const poolAvailableUsd = pool
+    ? Math.max(0, wadToNum(pool.totalAssetsUsdWad) * (1 - wadToNum(pool.utilizationWad)))
+    : 0;
+  const maxBorrowUsd = Math.max(0, Math.min(ltvCapUsd, poolAvailableUsd) * 0.99);
+  const liquidityIsTighterThanLtv = poolAvailableUsd < ltvCapUsd;
+
   const amountUsd = parsed != null ? Number(parsed) / 10 ** DEMO_POOL.decimals0 : 0;
   const projectedDebtUsd = debtUsd + amountUsd;
   const projectedHf = projectedDebtUsd > 0 ? suppliedUsd / projectedDebtUsd : Infinity;
@@ -658,8 +687,8 @@ function BorrowForm({
 
   const handleMax = () => {
     if (maxBorrowUsd <= 0) return;
-    // Round down to 2 decimals so we leave a thin headroom margin against
-    // rounding inside the hook's projected accrual.
+    // Round down to 2 decimals so a tiny pricing wiggle in the last
+    // sub-cent doesn't push us above the cap at submit time.
     const rounded = Math.floor(maxBorrowUsd * 100) / 100;
     setAmount(rounded.toString());
   };
@@ -726,7 +755,12 @@ function BorrowForm({
       </div>
 
       <div className="md-meta-row">
-        <span>Available to borrow</span>
+        <span>
+          Available to borrow
+          {suppliedUsd > 0 && liquidityIsTighterThanLtv && (
+            <span style={{ opacity: 0.6, marginLeft: 6 }}>· pool-limited</span>
+          )}
+        </span>
         <span className="mono" style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <span>{fmtUSD(maxBorrowUsd, 2)}</span>
           {maxBorrowUsd > 0 && (
