@@ -17,13 +17,17 @@ import { xLayer } from "./chains";
  * WalletConnect Cloud project for Liquids.finance. Set
  * `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` to override (e.g. per-deploy projects).
  */
-const projectId =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "";
+const realProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "";
 
-// Hard-to-miss runtime hint when the env var didn't land — without a valid
-// projectId the WalletConnect SignClient init throws silently and the QR
-// modal opens with a dead pairing URI.
-if (typeof window !== "undefined" && !projectId) {
+// `getDefaultConfig` throws `No projectId found` when the value is empty,
+// which kills static prerendering during `next build` (CI, Vercel preview
+// without env set, etc.). We feed a zero-filled placeholder through to
+// satisfy the type/validation check at build time; the runtime warning
+// below still surfaces the real misconfiguration to anyone actually
+// trying to use the app.
+const projectId = realProjectId || "00000000000000000000000000000000";
+
+if (typeof window !== "undefined" && !realProjectId) {
   console.warn(
     "[wagmi] NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is empty — WalletConnect QR pairing will fail. " +
       "Set the env var in `packages/app/.env.local` (dev) or in Vercel project env (prod) and restart."

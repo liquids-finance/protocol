@@ -16,7 +16,9 @@ next-env.d.ts
 
 # Editor / OS
 .DS_Store
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
