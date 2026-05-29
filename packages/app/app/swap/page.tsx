@@ -1,7 +1,7 @@
 "use client";
 
 import { maxUint256 } from "viem";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useAccount,
   useChainId,
@@ -80,11 +80,30 @@ export default function SwapPage() {
   // ─── Quote ──────────────────────────────────────────────────────────
   const parsedSell = useMemo(() => parseAmount(sellAmt, sellTok.decimals), [sellAmt, sellTok]);
   const zeroForOne = sellTok.index === 0;
-  const { quote, isFetching: quoteLoading } = useQuote({
+  const {
+    quote,
+    isFetching: quoteLoading,
+    dataUpdatedAt: quoteUpdatedAt,
+    refreshMs: quoteRefreshMs,
+  } = useQuote({
     zeroForOne,
     exactAmount: parsedSell ?? 0n,
     enabled: parsedSell != null && parsedSell > 0n,
   });
+
+  // Tick every second so the "Refresh in Ns" label visibly counts down.
+  // Driven by a useState bumper so we don't reach into refs from JSX —
+  // 1 Hz is plenty for a human-readable countdown, well below the cost
+  // of any pool / quote read.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    if (!quote) return;
+    const id = window.setInterval(() => setNowTick((n) => n + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [quote]);
+  const refreshInSec = quote && quoteUpdatedAt > 0
+    ? Math.max(0, Math.ceil((quoteUpdatedAt + quoteRefreshMs - Date.now()) / 1000))
+    : null;
 
   const buyAmtFromQuote = quote
     ? rawToNum(quote.amountOut, buyTok.decimals).toFixed(buyTok.decimals === 18 ? 6 : 2)
@@ -122,6 +141,7 @@ export default function SwapPage() {
   const { writeContractAsync } = useWriteContract();
   const chainId = useChainId();
   const [busy, setBusy] = useState(false);
+  const submitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const onSwap = async () => {
     if (!quote || parsedSell == null || !client || !urPermit || !address) return;
@@ -139,7 +159,9 @@ export default function SwapPage() {
       { key: "tx", label: needsPermitSign ? "Permit + V4 swap" : "V4 swap" },
     ];
 
-    flow.start(`Swap ${sellTok.symbol} → ${buyTok.symbol}`, steps);
+    flow.start(`Swap ${sellTok.symbol} → ${buyTok.symbol}`, steps, {
+      onRetry: () => submitRef.current(),
+    });
     setBusy(true);
     try {
       if (needsErc20Approve) {
@@ -155,6 +177,7 @@ export default function SwapPage() {
         flow.setStep("ap", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap", { status: "done" });
+        await refetchLive();
       }
 
       let permitInput: `0x${string}` | null = null;
@@ -211,6 +234,7 @@ export default function SwapPage() {
       setBusy(false);
     }
   };
+  submitRef.current = onSwap;
 
   const flip = () => {
     setSellTok(buyTok);
@@ -308,6 +332,7 @@ export default function SwapPage() {
           gasEstimate={quote?.gasEstimate ?? null}
           gasUsd={gasUsd}
           loading={quoteLoading}
+          refreshInSec={refreshInSec}
         />
 
         <button
@@ -403,6 +428,7 @@ function PriceInfo({
   gasEstimate,
   gasUsd,
   loading,
+  refreshInSec,
 }: {
   sellTok: TokenMeta;
   buyTok: TokenMeta;
@@ -413,6 +439,10 @@ function PriceInfo({
   gasEstimate: bigint | null;
   gasUsd: number | null;
   loading: boolean;
+  /** Seconds until the next quote auto-refresh. null while no quote
+   *  has loaded yet; renders a tiny "fetching…" / "refresh Ns" hint
+   *  on the price row so the user sees the quote is alive. */
+  refreshInSec: number | null;
 }) {
   const rateLabel = midRate
     ? `1 ${sellTok.symbol} = ${fmtNum(midRate, midRate < 1 ? 6 : 2)} ${buyTok.symbol}`
@@ -429,8 +459,20 @@ function PriceInfo({
   return (
     <div className="swap-info">
       <div className="swap-info-row">
-        <span>Price</span>
-        <span className="mono">{loading ? "fetching…" : rateLabel}</span>
+        <span>
+          Price
+          {refreshInSec != null && !loading && (
+            <span style={{ opacity: 0.5, marginLeft: 6, fontSize: 11 }}>
+              · refresh {refreshInSec}s
+            </span>
+          )}
+          {loading && (
+            <span style={{ opacity: 0.5, marginLeft: 6, fontSize: 11 }}>
+              · refreshing…
+            </span>
+          )}
+        </span>
+        <span className="mono">{loading && !midRate ? "fetching…" : rateLabel}</span>
       </div>
       <div className="swap-info-row">
         <span>Minimum received</span>

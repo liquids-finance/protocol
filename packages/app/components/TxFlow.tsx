@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -31,10 +32,21 @@ interface FlowSnapshot {
   state: FlowState;
   title: string;
   steps: TxStep[];
+  /** True iff the most recent failure looks like a wallet rejection (4001
+   *  / "User rejected" / "User denied") rather than an on-chain revert. */
+  failureIsRejection: boolean;
+}
+
+interface StartOptions {
+  /** Re-runs the same submit flow. Modal exposes this as a "Retry" button
+   *  on the failed step. The submit is expected to re-derive its own step
+   *  list from current state, so already-confirmed steps (approvals,
+   *  signatures whose allowance is still valid) get skipped on retry. */
+  onRetry?: () => void | Promise<void>;
 }
 
 interface TxFlowApi {
-  start: (title: string, steps: TxStepInput[]) => void;
+  start: (title: string, steps: TxStepInput[], opts?: StartOptions) => void;
   setStep: (key: string, update: Partial<Omit<TxStep, "key" | "label">>) => void;
   done: () => void;
   fail: (errorMsg?: string) => void;
@@ -50,20 +62,43 @@ const TxFlowContext = createContext<TxFlowApi | null>(null);
  * progress view + final tx-hash links — replaces the per-step toast spam
  * we had during Phases 3–5.
  */
+/** Heuristic for "was this a wallet rejection vs an on-chain revert?".
+ *  EIP-1193 says rejection comes back as code 4001, but every wallet
+ *  spells the message differently — match a few common shapes plus the
+ *  numeric code so we cover MetaMask, Rabby, WC mobile wallets, OKX. */
+function looksLikeUserRejection(msg: string | undefined): boolean {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return (
+    m.includes("user rejected") ||
+    m.includes("user denied") ||
+    m.includes("rejected the request") ||
+    m.includes("4001")
+  );
+}
+
 export function TxFlowProvider({ children }: { children: React.ReactNode }) {
   const [snap, setSnap] = useState<FlowSnapshot>({
     open: false,
     state: "closed",
     title: "",
     steps: [],
+    failureIsRejection: false,
   });
 
-  const start = useCallback<TxFlowApi["start"]>((title, steps) => {
+  // The submit-again callback is kept in a ref (not in `snap`) because it
+  // changes identity on every render in the form component and we don't
+  // want that to force a modal re-render on each keystroke.
+  const onRetryRef = useRef<(() => void | Promise<void>) | null>(null);
+
+  const start = useCallback<TxFlowApi["start"]>((title, steps, opts) => {
+    onRetryRef.current = opts?.onRetry ?? null;
     setSnap({
       open: true,
       state: "running",
       title,
       steps: steps.map((s) => ({ ...s, status: "idle" })),
+      failureIsRejection: false,
     });
   }, []);
 
@@ -75,7 +110,8 @@ export function TxFlowProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const done = useCallback(() => {
-    setSnap((s) => ({ ...s, state: "done" }));
+    onRetryRef.current = null;
+    setSnap((s) => ({ ...s, state: "done", failureIsRejection: false }));
   }, []);
 
   const fail = useCallback<TxFlowApi["fail"]>((errorMsg) => {
@@ -87,12 +123,36 @@ export function TxFlowProvider({ children }: { children: React.ReactNode }) {
       const steps = s.steps.map((step, i) =>
         i === target ? { ...step, status: "failed" as const, errorMsg } : step
       );
-      return { ...s, state: "failed", steps };
+      return { ...s, state: "failed", steps, failureIsRejection: looksLikeUserRejection(errorMsg) };
     });
   }, []);
 
   const close = useCallback(() => {
-    setSnap((s) => ({ ...s, open: false, state: "closed" }));
+    onRetryRef.current = null;
+    setSnap((s) => ({ ...s, open: false, state: "closed", failureIsRejection: false }));
+  }, []);
+
+  const retry = useCallback(async () => {
+    const fn = onRetryRef.current;
+    if (!fn) return;
+    // Drop the failed/error marker on the failed step and flip the flow
+    // back to "running" before re-invoking — the form's submit will set
+    // the next pending step as it walks forward. Keeps already-done step
+    // markers intact so the user can see what carried over.
+    setSnap((s) => ({
+      ...s,
+      state: "running",
+      failureIsRejection: false,
+      steps: s.steps.map((step) =>
+        step.status === "failed" ? { ...step, status: "idle", errorMsg: undefined } : step
+      ),
+    }));
+    try {
+      await fn();
+    } catch {
+      // The submit's own try/catch already routes errors through fail().
+      // Swallow here so an unhandled promise rejection doesn't surface.
+    }
   }, []);
 
   const api = useMemo<TxFlowApi>(() => ({ start, setStep, done, fail, close }), [
@@ -106,7 +166,7 @@ export function TxFlowProvider({ children }: { children: React.ReactNode }) {
   return (
     <TxFlowContext.Provider value={api}>
       {children}
-      <TxModal snap={snap} api={api} />
+      <TxModal snap={snap} api={api} onRetry={retry} canRetry={onRetryRef.current != null} />
     </TxFlowContext.Provider>
   );
 }
@@ -121,14 +181,31 @@ export function useTxFlow(): TxFlowApi {
 //   Modal renderer
 // ════════════════════════════════════════════════════════════════════════
 
-function TxModal({ snap, api }: { snap: FlowSnapshot; api: TxFlowApi }) {
+function TxModal({
+  snap,
+  api,
+  onRetry,
+  canRetry,
+}: {
+  snap: FlowSnapshot;
+  api: TxFlowApi;
+  onRetry: () => void | Promise<void>;
+  canRetry: boolean;
+}) {
   if (!snap.open) return null;
+
+  const completedCount = snap.steps.filter((s) => s.status === "done").length;
+  const hasResumeContext = completedCount > 0 && snap.state === "failed";
 
   const subtitle =
     snap.state === "running"
       ? "Confirm each step in your wallet — leave this open until it's done."
       : snap.state === "done"
       ? "Transaction confirmed on X Layer."
+      : snap.failureIsRejection && hasResumeContext
+      ? `You cancelled in the wallet. Earlier steps are still good — Retry picks up from where you stopped.`
+      : snap.failureIsRejection
+      ? "You cancelled in the wallet. Retry to try again."
       : "Something went wrong. Review the failing step below.";
 
   // Click on backdrop closes only when the flow has finished (success/failure)
@@ -151,9 +228,34 @@ function TxModal({ snap, api }: { snap: FlowSnapshot; api: TxFlowApi }) {
           ))}
         </ul>
 
-        {snap.state !== "running" && (
+        {snap.state === "failed" && canRetry && (
+          <div className="tx-modal-foot" style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ flex: 1 }}
+              onClick={api.close}
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ flex: 1 }}
+              onClick={onRetry}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {snap.state === "failed" && !canRetry && (
           <button type="button" className="btn btn-primary tx-modal-foot" onClick={api.close}>
-            {snap.state === "done" ? "Done" : "Close"}
+            Close
+          </button>
+        )}
+        {snap.state === "done" && (
+          <button type="button" className="btn btn-primary tx-modal-foot" onClick={api.close}>
+            Done
           </button>
         )}
       </div>

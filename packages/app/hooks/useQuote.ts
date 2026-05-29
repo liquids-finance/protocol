@@ -6,6 +6,8 @@ import { QUOTER_ABI } from "@/lib/abi/quoter";
 import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
 import { CONTRACTS } from "@/lib/contracts";
 
+const QUOTE_REFRESH_MS = 12_000;
+
 export interface QuoteInput {
   /** Side that drives the trade. `false` = currency1 → currency0. */
   zeroForOne: boolean;
@@ -30,8 +32,13 @@ export function useQuote({ zeroForOne, exactAmount, enabled }: QuoteInput): {
   quote: QuoteResult | null;
   isFetching: boolean;
   isError: boolean;
+  /** ms since epoch when react-query last successfully filled this read.
+   *  0 while we've never had a result. UI uses this with `refreshMs` to
+   *  render a countdown to the next auto-refresh. */
+  dataUpdatedAt: number;
+  refreshMs: number;
 } {
-  const { data, isFetching, isError } = useReadContract({
+  const { data, isFetching, isError, dataUpdatedAt } = useReadContract({
     address: CONTRACTS.quoter,
     abi: QUOTER_ABI,
     functionName: "quoteExactInputSingle",
@@ -45,11 +52,17 @@ export function useQuote({ zeroForOne, exactAmount, enabled }: QuoteInput): {
     ],
     query: {
       enabled: enabled && exactAmount > 0n,
-      refetchInterval: 12_000,
+      refetchInterval: QUOTE_REFRESH_MS,
     },
   });
 
-  if (!data) return { quote: null, isFetching, isError };
+  if (!data) return { quote: null, isFetching, isError, dataUpdatedAt, refreshMs: QUOTE_REFRESH_MS };
   const [amountOut, gasEstimate] = data as readonly [bigint, bigint];
-  return { quote: { amountOut, gasEstimate }, isFetching, isError };
+  return {
+    quote: { amountOut, gasEstimate },
+    isFetching,
+    isError,
+    dataUpdatedAt,
+    refreshMs: QUOTE_REFRESH_MS,
+  };
 }

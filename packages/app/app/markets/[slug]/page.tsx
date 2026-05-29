@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { maxUint256 } from "viem";
 import { useAccount, useChainId, usePublicClient, useSignTypedData, useWriteContract } from "wagmi";
 
@@ -284,6 +284,28 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
   const insufBal0 = user && parsed0 != null && parsed0 > user.usdt0Balance;
   const insufBal1 = user && parsed1 != null && parsed1 > user.xethBalance;
 
+  // Pair-aware Max: clicking Max on side A should fill the largest amount
+  // for which the sister side still has enough balance. So Max for side 0
+  // is `min(balance0, balance1 × rate0Per1)` — i.e. capped by whichever
+  // token would run out first at the current spot ratio. Float math is
+  // fine here because we convert back through Math.floor + decimal scale,
+  // which loses at most one sub-unit (USDT0: 0.000001, xETH: 1 wei).
+  const { maxRaw0, maxRaw1 } = useMemo(() => {
+    if (!user || !pool || !pool.rate0Per1 || !pool.rate1Per0) {
+      return { maxRaw0: user?.usdt0Balance, maxRaw1: user?.xethBalance };
+    }
+    const bal0 = rawToNum(user.usdt0Balance, DEMO_POOL.decimals0);
+    const bal1 = rawToNum(user.xethBalance, DEMO_POOL.decimals1);
+    const cap0FromBal1 = bal1 * pool.rate0Per1;
+    const cap1FromBal0 = bal0 * pool.rate1Per0;
+    const max0Num = Math.min(bal0, cap0FromBal1);
+    const max1Num = Math.min(bal1, cap1FromBal0);
+    return {
+      maxRaw0: BigInt(Math.floor(max0Num * 10 ** DEMO_POOL.decimals0)),
+      maxRaw1: BigInt(Math.floor(max1Num * 10 ** DEMO_POOL.decimals1)),
+    };
+  }, [user, pool]);
+
   const flow = useTxFlow();
   const chainId = useChainId();
   const client = usePublicClient();
@@ -291,6 +313,16 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
   const { signTypedDataAsync } = useSignTypedData();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
+
+  // Resume support: when a step inside the modal fails (user reject,
+  // tx revert), the modal needs a way to re-fire this same submit. We
+  // can't pass `submitSupply` directly because its closure freezes form
+  // state at the moment `flow.start()` ran — by retry time, refetchLive
+  // may have already updated allowances, balances, etc. Storing the
+  // latest `submitSupply` in a ref lets the modal always invoke the
+  // fresh version, which re-evaluates `needs0` / `needs1` and skips
+  // approvals that landed before the failed step.
+  const submitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const submitSupply = async () => {
     if (!user || !client || !haveAmounts || !address) return;
@@ -304,7 +336,7 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
       { key: "tx", label: "Supply to pool" },
     ];
 
-    flow.start("Supply", steps);
+    flow.start("Supply", steps, { onRetry: () => submitRef.current() });
     setBusy(true);
     try {
       if (needs0) {
@@ -320,6 +352,10 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
         flow.setStep("ap0", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap0", { status: "done" });
+        // Refresh allowances NOW so a later-step failure + Retry skips
+        // this approve instead of re-prompting the user for the same
+        // signature against now-stale cached state.
+        await refetchLive();
       }
       if (needs1) {
         flow.setStep("ap1", { status: "pending" });
@@ -334,6 +370,7 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
         flow.setStep("ap1", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap1", { status: "done" });
+        await refetchLive();
       }
 
       flow.setStep("sig", { status: "pending" });
@@ -379,6 +416,7 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
       setBusy(false);
     }
   };
+  submitRef.current = submitSupply;
 
   const ctaLabel = !isConnected
     ? "Connect wallet"
@@ -401,6 +439,7 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
         value={amount0}
         onChange={handleChange0}
         balanceRaw={user?.usdt0Balance}
+        maxRaw={maxRaw0}
       />
       <div style={{ height: 8 }} />
       <AmountInput
@@ -410,6 +449,7 @@ function SupplyForm({ user, pool, refetchLive, isConnected }: CollateralPanelPro
         value={amount1}
         onChange={handleChange1}
         balanceRaw={user?.xethBalance}
+        maxRaw={maxRaw1}
       />
       <button
         type="button"
@@ -484,10 +524,15 @@ function WithdrawForm({ user, pool, refetchLive, isConnected, suppliedUsd, debtU
   const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
+  const submitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const submit = async () => {
     if (sharesToBurn === 0n || !client || !address) return;
-    flow.start("Withdraw", [{ key: "tx", label: "Burn LP shares + receive tokens" }]);
+    flow.start(
+      "Withdraw",
+      [{ key: "tx", label: "Burn LP shares + receive tokens" }],
+      { onRetry: () => submitRef.current() }
+    );
     setBusy(true);
     try {
       flow.setStep("tx", { status: "pending" });
@@ -512,6 +557,7 @@ function WithdrawForm({ user, pool, refetchLive, isConnected, suppliedUsd, debtU
       setBusy(false);
     }
   };
+  submitRef.current = submit;
 
   // Hook reverts `DebtOutstanding` on any withdraw while caller has scaled
   // debt > 0, so we short-circuit the form with a clear explanation rather
@@ -698,10 +744,15 @@ function BorrowForm({
   const { address } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
+  const submitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const submit = async () => {
     if (parsed == null || parsed === 0n || !client || !address) return;
-    flow.start("Borrow", [{ key: "tx", label: `Borrow ${DEMO_POOL.symbol0}` }]);
+    flow.start(
+      "Borrow",
+      [{ key: "tx", label: `Borrow ${DEMO_POOL.symbol0}` }],
+      { onRetry: () => submitRef.current() }
+    );
     setBusy(true);
     try {
       flow.setStep("tx", { status: "pending" });
@@ -725,6 +776,7 @@ function BorrowForm({
       setBusy(false);
     }
   };
+  submitRef.current = submit;
 
   const disabled =
     !isConnected || parsed == null || parsed === 0n || overCap || busy || suppliedUsd <= 0;
@@ -833,6 +885,7 @@ function RepayForm({
   const { signTypedDataAsync } = useSignTypedData();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState(false);
+  const submitRef = useRef<(amount: bigint) => Promise<void>>(() => Promise.resolve());
 
   // Max = lesser of (wallet balance, outstanding debt) — repaying more than
   // owed is wasteful and the hook would refund anyway; staying ≤ debt keeps
@@ -858,7 +911,7 @@ function RepayForm({
       { key: "tx", label: "Repay debt" },
     ];
 
-    flow.start("Repay", steps);
+    flow.start("Repay", steps, { onRetry: () => submitRef.current(rawAmount) });
     setBusy(true);
     try {
       if (needsApprove) {
@@ -874,6 +927,7 @@ function RepayForm({
         flow.setStep("ap", { txHash: hash });
         await client.waitForTransactionReceipt({ hash });
         flow.setStep("ap", { status: "done" });
+        await refetchLive();
       }
 
       flow.setStep("sig", { status: "pending" });
@@ -914,6 +968,7 @@ function RepayForm({
       setBusy(false);
     }
   };
+  submitRef.current = runRepay;
 
   const submit = () => {
     if (parsed == null || parsed === 0n) return;
@@ -1013,6 +1068,7 @@ function AmountInput({
   value,
   onChange,
   balanceRaw,
+  maxRaw,
 }: {
   label: string;
   sym: string;
@@ -1020,13 +1076,19 @@ function AmountInput({
   value: string;
   onChange: (v: string) => void;
   balanceRaw?: bigint;
+  /** Override what "Max" fills with. Useful for Supply, where the cap
+   *  is the smaller of (this side's balance, sister side's balance
+   *  scaled to this side via spot price), so we never auto-fill an
+   *  amount the user can't actually match on the other token. */
+  maxRaw?: bigint;
 }) {
+  const effectiveMax = maxRaw ?? balanceRaw;
   const handleMax = () => {
-    if (balanceRaw == null) return;
+    if (effectiveMax == null) return;
     // Render at the full precision the asset supports so parseAmount
     // round-trips cleanly.
-    const whole = balanceRaw / 10n ** BigInt(decimals);
-    const frac = balanceRaw % 10n ** BigInt(decimals);
+    const whole = effectiveMax / 10n ** BigInt(decimals);
+    const frac = effectiveMax % 10n ** BigInt(decimals);
     const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
     onChange(fracStr ? `${whole}.${fracStr}` : whole.toString());
   };
