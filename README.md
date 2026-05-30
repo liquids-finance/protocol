@@ -279,6 +279,7 @@ We **explicitly did not** test (out of MVP scope):
 What we deliberately punted, in rough priority order:
 
 - **Concentrated-vault auto-rebalance.** Full-range MVP loses V4's capital efficiency edge; v2 picks a range and rebalances via `afterSwap`.
+- **Eager LP-fee accrual in `shareValue`.** Today the hook's V4 position auto-claims swap fees on every `modifyLiquidity` call — supply/withdraw/borrow/repay flows — so fees compound into the position permanently and a withdrawing LP gets their share of accumulated fees. Between those touches, however, `LiquidsLens._v4ValueUSDWad` reads only `vault.totalLiquidity × oracle prices`, so `shareValue` is "lazy-low" by exactly the un-claimed `feeGrowthInside × L` until the next position modify. The frontend works around this by computing a realised LP-fee APR from `feeGrowthGlobal` snapshots (same maths Uniswap's subgraph runs, done client-side); v2 lifts the same math into the Lens so the shareValue reading is eager.
 - **Reserve factor > 0 / insurance fund.** Slice off some interest into a protocol-owned buffer so bad debt does not hit LPs first.
 - **Keeper integration (Chainlink Automation / Gelato).** Permissionless `liquidate()` works today; an active keeper makes it production-grade.
 - **Dual-asset borrow.** Allow borrowing either side of the pair, not just the stable. Two indices per pool.

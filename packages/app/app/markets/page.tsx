@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { TokenPair } from "@/components/TokenIcon";
 import { useLiveData } from "@/hooks/useLiveData";
+import { usePoolFeeApr } from "@/hooks/usePoolFeeApr";
 import { fmtCompact, fmtPct, wadToNum } from "@/lib/format";
 import { MARKETS } from "@/lib/markets";
 import type { Market } from "@/lib/markets";
@@ -23,10 +24,13 @@ export default function MarketsPage() {
   const [sort, setSort] = useState<SortState>({ key: "supply", dir: "desc" });
 
   const { pool } = useLiveData();
+  const { apr: feeApr } = usePoolFeeApr(pool);
 
   // Replace the first matching seed row (xETH / USDT0 on X Layer) with live
   // numbers. Falls back to seed values until the multicall resolves so the
-  // table is never empty.
+  // table is never empty. `supplyApy` is the "Dual APY" the rest of the app
+  // talks about — interest paid by borrowers + LP swap-fee APR (when the
+  // snapshot window is wide enough to back one out).
   const liveMarket: Market = useMemo(() => {
     const seed = MARKETS.find(
       (m) => m.coll === DEMO_POOL.symbol1 && m.loan === DEMO_POOL.symbol0 && m.chain === "X Layer"
@@ -37,6 +41,8 @@ export default function MarketsPage() {
     const supplyUsd = wadToNum(pool.totalAssetsUsdWad);
     const util = wadToNum(pool.utilizationWad);
     const borrowedUsd = supplyUsd * util;
+    const lendingPct = wadToNum(pool.lendingApyWad) * 100;
+    const feeAprPct = feeApr != null ? feeApr * 100 : 0;
     return {
       ...seed,
       coll: DEMO_POOL.symbol1,
@@ -45,12 +51,12 @@ export default function MarketsPage() {
       supply: supplyUsd,
       liquidity: supplyUsd - borrowedUsd,
       util,
-      supplyApy: wadToNum(pool.lendingApyWad) * 100,
+      supplyApy: lendingPct + feeAprPct,
       borrowApy: wadToNum(pool.borrowApyWad) * 100,
       badge: "core",
       isLive: true,
     };
-  }, [pool]);
+  }, [pool, feeApr]);
 
   const rows = useMemo(() => {
     // Only live markets render — preview rows would be misleading and we

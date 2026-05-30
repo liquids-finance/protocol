@@ -78,6 +78,11 @@ export interface PoolLive {
   /** Vault's full-range token totals (raw units of each currency). */
   vaultAmount0Raw: bigint;
   vaultAmount1Raw: bigint;
+  /** Lifetime LP-fee accumulator per unit of liquidity for token0,
+   *  X128 fixed-point. `usePoolFeeApr` diffs this against a snapshot
+   *  to back out the realised swap-fee APR. */
+  feeGrowthGlobal0X128: bigint;
+  feeGrowthGlobal1X128: bigint;
 }
 
 function usePoolReads(): {
@@ -103,6 +108,13 @@ function usePoolReads(): {
       { address: CONTRACTS.hook, abi: HOOK_VAULT_READ_ABI, functionName: "vaults", args: [DEMO_POOL.poolId] },
       // 7
       { address: DEMO_POOL.shareToken, abi: ERC20_ABI, functionName: "totalSupply" },
+      // 8  (uint256, uint256) — feeGrowthGlobal0/1 X128, lifetime LP-fee accumulators
+      {
+        address: CONTRACTS.stateView,
+        abi: STATE_VIEW_ABI,
+        functionName: "getFeeGrowthGlobals",
+        args: [DEMO_POOL.poolId],
+      },
     ],
     query: {
       refetchInterval: POLL_INTERVAL_MS,
@@ -112,7 +124,7 @@ function usePoolReads(): {
   });
 
   const pool = useMemo<PoolLive | null>(() => {
-    if (!data || data.length < 8) return null;
+    if (!data || data.length < 9) return null;
 
     // Field-level fallback policy: a single failing read on the multicall
     // (e.g. a transient RPC hiccup or one Lens function reverting on an
@@ -145,6 +157,11 @@ function usePoolReads(): {
       [0n, 0n, 0n, 0n]
     );
     const totalShares = read<bigint>(7, "totalSupply", 0n);
+    const feeGrowth = read<readonly [bigint, bigint]>(
+      8,
+      "getFeeGrowthGlobals",
+      [0n, 0n]
+    );
 
     const sqrtPriceX96 = slot0[0];
     const totalLiquidity = vault[0];
@@ -183,6 +200,8 @@ function usePoolReads(): {
       rate1Per0,
       vaultAmount0Raw,
       vaultAmount1Raw,
+      feeGrowthGlobal0X128: feeGrowth[0],
+      feeGrowthGlobal1X128: feeGrowth[1],
     };
   }, [data]);
 

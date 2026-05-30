@@ -9,6 +9,7 @@ import { useAccount } from "wagmi";
 import { TokenIcon, TokenPair } from "@/components/TokenIcon";
 import { useTicker } from "@/components/useTicker";
 import { useLiveData } from "@/hooks/useLiveData";
+import { usePoolFeeApr } from "@/hooks/usePoolFeeApr";
 import { fmtNum, fmtPct, fmtUSD, rawToNum, wadToNum } from "@/lib/format";
 import { DEMO_POOL } from "@/lib/contracts";
 
@@ -23,6 +24,7 @@ const MAX_LTV = 0.6;
 export default function DashboardPage() {
   const { isConnected } = useAccount();
   const { pool, user } = useLiveData();
+  const { apr: feeApr } = usePoolFeeApr(pool);
 
   const view = useMemo(() => {
     if (!isConnected) return { state: "disconnected" as const };
@@ -37,7 +39,12 @@ export default function DashboardPage() {
       return { state: "empty" as const };
     }
 
-    const supplyApy = wadToNum(pool.lendingApyWad) * 100;
+    // Dual APY = interest paid by borrowers (lendingAPY) + LP swap fees
+    // realised over the snapshot window. While the snapshot is still
+    // seeding, feeApr is null and we fall back to just lendingAPY.
+    const lendingPct = wadToNum(pool.lendingApyWad) * 100;
+    const feeAprPct = feeApr != null ? feeApr * 100 : 0;
+    const supplyApy = lendingPct + feeAprPct;
     const borrowApy = wadToNum(pool.borrowApyWad) * 100;
 
     const supEarn = (suppliedUsd * supplyApy) / 100;
@@ -62,7 +69,7 @@ export default function DashboardPage() {
       hfKind,
       used,
     };
-  }, [isConnected, user, pool]);
+  }, [isConnected, user, pool, feeApr]);
 
   if (view.state === "disconnected") return <DisconnectedState />;
   if (view.state === "loading") return <LoadingState />;

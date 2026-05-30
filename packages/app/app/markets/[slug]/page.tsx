@@ -10,6 +10,7 @@ import { extractErrorMessage, useTxFlow } from "@/components/TxFlow";
 import { TokenIcon, TokenPair } from "@/components/TokenIcon";
 import { useLiveData } from "@/hooks/useLiveData";
 import type { PoolLive, UserLive } from "@/hooks/useLiveData";
+import { fmtFeeAprWindow, usePoolFeeApr } from "@/hooks/usePoolFeeApr";
 import { ERC20_ABI } from "@/lib/abi/erc20";
 import { HOOK_ABI } from "@/lib/abi/hook";
 import { DEMO_POOL_KEY } from "@/lib/abi/poolKey";
@@ -57,12 +58,15 @@ export default function MarketDetailPage() {
 function DemoMarketDetail() {
   const { isConnected } = useAccount();
   const { pool, user, refetch: refetchLive } = useLiveData();
+  const { apr: feeApr, windowSec: feeAprWindow } = usePoolFeeApr(pool);
 
   const supplyUsd = pool ? wadToNum(pool.totalAssetsUsdWad) : 0;
   const util = pool ? wadToNum(pool.utilizationWad) : 0;
   const borrowedUsd = supplyUsd * util;
   const availableUsd = supplyUsd - borrowedUsd;
-  const supplyApy = pool ? wadToNum(pool.lendingApyWad) * 100 : 0;
+  const lendingPct = pool ? wadToNum(pool.lendingApyWad) * 100 : 0;
+  const feeAprPct = feeApr != null ? feeApr * 100 : 0;
+  const supplyApy = lendingPct + feeAprPct;
   const borrowApy = pool ? wadToNum(pool.borrowApyWad) * 100 : 0;
 
   const userSupplied = user ? wadToNum(user.suppliedUsdWad) : 0;
@@ -103,10 +107,21 @@ function DemoMarketDetail() {
           <span className="display db-stat-val">{fmtCompact(borrowedUsd)}</span>
           <span className="db-stat-delta mk-delta-neutral">{(util * 100).toFixed(1)}% util</span>
         </div>
-        <div className="db-stat">
+        <div
+          className="db-stat"
+          title={
+            feeApr != null
+              ? `Lending ${lendingPct.toFixed(2)} % + LP fees ${feeAprPct.toFixed(2)} % (${fmtFeeAprWindow(feeAprWindow)})`
+              : `Lending ${lendingPct.toFixed(2)} % + LP fees (seeding…)`
+          }
+        >
           <span className="label-eyebrow">Dual APY</span>
           <span className="display db-stat-val db-apy-pos">{fmtPct(supplyApy)}</span>
-          <span className="db-stat-delta mk-delta-neutral">LP fees + lending</span>
+          <span className="db-stat-delta mk-delta-neutral">
+            {feeApr != null
+              ? `lending ${lendingPct.toFixed(2)}% + fees ${feeAprPct.toFixed(2)}%`
+              : "LP fees seeding…"}
+          </span>
         </div>
         <div className="db-stat">
           <span className="label-eyebrow">Borrow APY</span>
